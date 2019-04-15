@@ -1,3 +1,4 @@
+import com.damnhandy.uri.template.UriTemplate
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -11,15 +12,26 @@ import okhttp3.*
 import okio.Okio
 import java.util.*
 import okhttp3.OkHttpClient
+import org.w3c.dom.Element
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import javax.net.ssl.*
+import com.sun.xml.internal.ws.addressing.EndpointReferenceUtil.transform
+import javax.xml.transform.Transformer
+import javax.xml.transform.TransformerFactory
+import javax.xml.transform.stream.StreamResult
+import java.io.StringWriter
+import javax.xml.transform.dom.DOMSource
 
 
 class Release {
 
     @JsonClass(generateAdapter = true)
-    class Config(val hstracker_dir: String, val github_token: String, val hockey_app_token: String, val sparkle_dir: String)
+    class Config(val hstracker_dir: String,
+                 val hsdecktracker_net_dir: String,
+                 val github_token: String,
+                 val hockey_app_token: String,
+                 val sparkle_dir: String)
 
     val config = readConfig()
     val hockeyAppAppId = "2f0021b9bb1842829aa1cfbbd85d3bed"
@@ -38,7 +50,9 @@ class Release {
     val changelogMdPath = "${config.hstracker_dir}/CHANGELOG.md"
 
     val generateAppcast = "${config.sparkle_dir}/bin/generate_appcast"
-    val appCast2XmlPath = "$releaseDir/appcast2.xml"
+    val appCast2ReleaseXmlPath = "$releaseDir/appcast2.xml"
+
+    val appCast2XmlPath ="${config.hsdecktracker_net_dir}/hstracker/appcast2.xml"
 
     val dryRun = false
     val moshi = Moshi.Builder().build()
@@ -179,9 +193,45 @@ class Release {
 //        runCommand(config.hstracker_dir, "git push origin --tags")
 //
 //        uploadToHockeyApp(changelog.first().markdown)
-        makeGithubRelease(changelogVersion, changelog.first().markdown)
+//        makeGithubRelease(changelogVersion, changelog.first().markdown)
 
-        runCommand(config.hstracker_dir, "$generateAppcast $hstrackerPath/dsa_priv.pem $releaseDir")
+        // not sure why we need to remove the sparkle cache but we do else it reuses previous versions
+        runCommand(config.hstracker_dir, "rm -rf ~/Library/Caches/Sparkle_generate_appcast/")
+        runCommand(config.hstracker_dir, "$generateAppcast ${config.hstracker_dir}/dsa_priv.pem $releaseDir")
+
+        runCommand(config.hsdecktracker_net_dir, "git checkout master")
+        runCommand(config.hsdecktracker_net_dir, "git pull")
+        runCommand(config.hsdecktracker_net_dir, "git stash")
+        updateAppCast(plistVersion, changelog.first().markdown)
+    }
+
+    private fun updateAppCast(versionName: String, markdown: String) {
+        val factory = DocumentBuilderFactory.newInstance()
+        val builder = factory.newDocumentBuilder()
+        val releaseAppcastDocument = builder.parse(File(appCast2ReleaseXmlPath))
+
+        val releaseItems = releaseAppcastDocument.documentElement.getElementsByTagName("item")
+        if (releaseItems.length != 1) {
+            throw Exception("Appcast has generated too many items ${releaseItems.length}")
+        }
+        val itemElement = (releaseItems.item(0) as Element)
+        val enclosureNode = itemElement.getElementsByTagName("enclosure").item(0)
+        (enclosureNode as Element).setAttribute("url", "https://github.com/HearthSim/HSTracker/releases/download/$versionName/HSTracker.app.zip")
+
+        val appcastDocument = builder.parse(File(appCast2XmlPath))
+
+        val importedNode = appcastDocument.importNode(itemElement, true)
+        val pubDate = (importedNode as Element).getElementsByTagName("pubDate").item(0)
+        val description = appcastDocument.createElement("description")
+        description.textContent = toHtml(markdown)
+        importedNode.insertBefore(description, pubDate.nextSibling)
+        val channelNode = appcastDocument.documentElement.getElementsByTagName("channel").item(0)
+        channelNode.insertBefore(importedNode, channelNode.firstChild)
+
+        val result = StreamResult(File(appCast2XmlPath))
+        val tf = TransformerFactory.newInstance()
+        val transformer = tf.newTransformer()
+        transformer.transform(DOMSource(appcastDocument), result)
     }
 
     private fun uploadToHockeyApp(markdown: String) {
@@ -217,33 +267,33 @@ class Release {
 
 
     fun makeGithubRelease(versionName: String, markdown: String) {
-//        val input = mapOf(
-//            "tag_name" to versionName,
-//            "body" to markdown,
-//            "draft" to false,
-//            "prerelease" to false
-//        )
-//
-//        val request = Request.Builder()
-//            .post(RequestBody.create(MediaType.parse("application/json"), mapAdapter.toJson(input)))
-//            .url("https://api.github.com/repos/Hearthsim/HSTracker/releases?access_token=${config.github_token}")
-//            .build()
-//        val response = OkHttpClient().newCall(request).execute()
-//        if (!response.isSuccessful) {
-//            throw Exception("cannot create github release: ${response.body()?.string()}")
-//        }
-//
-//        val responseString = response.body()!!.string()
-//        System.out.println("github returned: $responseString")
-//        val release = mapAdapter.fromJson(responseString)!!
-//
-//        val uploadUrl = UriTemplate.fromTemplate(release["upload_url"] as String)
-//            .set("name", "HSTracker.app.zip")
-//            .expand()
+        val input = mapOf(
+            "tag_name" to versionName,
+            "body" to markdown,
+            "draft" to false,
+            "prerelease" to false
+        )
+
+        val request = Request.Builder()
+            .post(RequestBody.create(MediaType.parse("application/json"), mapAdapter.toJson(input)))
+            .url("https://api.github.com/repos/Hearthsim/HSTracker/releases?access_token=${config.github_token}")
+            .build()
+        val response = OkHttpClient().newCall(request).execute()
+        if (!response.isSuccessful) {
+            throw Exception("cannot create github release: ${response.body()?.string()}")
+        }
+
+        val responseString = response.body()!!.string()
+        System.out.println("github returned: $responseString")
+        val release = mapAdapter.fromJson(responseString)!!
+
+        val uploadUrl = UriTemplate.fromTemplate(release["upload_url"] as String)
+            .set("name", "HSTracker.app.zip")
+            .expand()
 
         val request2 = Request.Builder()
             .post(RequestBody.create(MediaType.parse("application/zip"), File(hstrackerAppZipPath)))
-            .url("https://uploads.github.com/repos/HearthSim/HSTracker/releases/16753581/assets?name=HSTracker.app.zip&access_token=${config.github_token}")
+            .url("$uploadUrl&access_token=${config.github_token}")
             .build()
 
         System.out.println("POST HSTracker.app.zip to Github")
@@ -251,9 +301,6 @@ class Release {
         if (!response2.isSuccessful) {
             throw Exception("cannot uploading file: ${response2.body()?.string()}")
         }
-
-
-
     }
 
     private fun zip(input: String, output: String) {
