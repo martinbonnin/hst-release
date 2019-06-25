@@ -182,21 +182,25 @@ class Release {
 
         File(releaseDir).mkdirs()
         File(optionsPlistPath).writeText(pListContents)
-//        runCommand(config.hstracker_dir, "xcodebuild -scheme HSTracker clean")
-//        runCommand(config.hstracker_dir,"xcodebuild -archivePath $hstrackerPath -scheme HSTracker archive")
-//        runCommand(config.hstracker_dir,"xcodebuild -exportArchive -archivePath $hstrackerXcarchivePath -exportPath $releaseDir -exportOptionsPlist $optionsPlistPath")
-//
-//        zip(hstrackerAppPath, hstrackerAppZipPath)
-//        zip(hstrackerXcarchiveDSYMPath, hstrackerDSYMZipPath)
-//
-//        runCommand(config.hstracker_dir, "git tag $plistVersion")
-//        runCommand(config.hstracker_dir, "git push origin --tags")
-//
-//        uploadToHockeyApp(changelog.first().markdown)
-//        makeGithubRelease(changelogVersion, changelog.first().markdown)
+        runCommand(config.hstracker_dir, "xcodebuild -scheme HSTracker clean")
+        runCommand(config.hstracker_dir,"xcodebuild -archivePath $hstrackerPath -scheme HSTracker archive")
+        runCommand(config.hstracker_dir,"xcodebuild -exportArchive -archivePath $hstrackerXcarchivePath -exportPath $releaseDir -exportOptionsPlist $optionsPlistPath")
+
+        zip(hstrackerAppPath, hstrackerAppZipPath)
+        zip(hstrackerXcarchiveDSYMPath, hstrackerDSYMZipPath)
+
+        runCommand(config.hstracker_dir, "git tag $plistVersion")
+        runCommand(config.hstracker_dir, "git push origin --tags")
+        runCommand(config.hstracker_dir, "git push origin master")
+
+        uploadToHockeyApp(changelog.first().markdown)
+        makeGithubRelease(changelogVersion, changelog.first().markdown)
 
         // not sure why we need to remove the sparkle cache but we do else it reuses previous versions
-        runCommand(config.hstracker_dir, "rm -rf ~/Library/Caches/Sparkle_generate_appcast/")
+        runCommand(config.hstracker_dir, "rm -rf /Users/Martin/Library/Caches/Sparkle_generate_appcast/")
+        // generateAppCast will output some warnings, that's ok at this point
+        // Warning: Private key not found in the Keychain (-25300). Please run the generate_keys tool
+        // Could not unarchive /Users/martin/git/HSTracker/archive/2019_6_6/options.plist Error Domain=SUSparkleErrorDomain Code=3000 "Not a supported archive format: file:///Users/martin/Library/Caches/Sparkle_generate_appcast/options.plist.tmp/options.plist" UserInfo={NSLocalizedDescription=Not a supported archive format: file:///Users/martin/Library/Caches/Sparkle_generate_appcast/options.plist.tmp/options.plist}
         runCommand(config.hstracker_dir, "$generateAppcast ${config.hstracker_dir}/dsa_priv.pem $releaseDir")
 
         runCommand(config.hsdecktracker_net_dir, "git checkout master")
