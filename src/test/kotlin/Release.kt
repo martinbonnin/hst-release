@@ -17,6 +17,8 @@ import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import javax.net.ssl.*
 import com.sun.xml.internal.ws.addressing.EndpointReferenceUtil.transform
+import java.io.ByteArrayInputStream
+import java.io.InputStream
 import javax.xml.transform.Transformer
 import javax.xml.transform.TransformerFactory
 import javax.xml.transform.stream.StreamResult
@@ -27,17 +29,20 @@ import javax.xml.transform.dom.DOMSource
 class Release {
 
     @JsonClass(generateAdapter = true)
-    class Config(val hstracker_dir: String,
-                 val hsdecktracker_net_dir: String,
-                 val github_token: String,
-                 val hockey_app_token: String,
-                 val sparkle_dir: String)
+    class Config(
+        val hstracker_dir: String,
+        val hsdecktracker_net_dir: String,
+        val github_token: String,
+        val hockey_app_token: String,
+        val sparkle_dir: String
+    )
 
     val config = readConfig()
     val hockeyAppAppId = "2f0021b9bb1842829aa1cfbbd85d3bed"
 
     val cal = GregorianCalendar()
-    val releaseDir = "${config.hstracker_dir}/archive/${cal.get(Calendar.YEAR)}_${cal.get(Calendar.MONTH) + 1}_${cal.get(Calendar.DAY_OF_MONTH)}"
+    val releaseDir =
+        "${config.hstracker_dir}/archive/${cal.get(Calendar.YEAR)}_${cal.get(Calendar.MONTH) + 1}_${cal.get(Calendar.DAY_OF_MONTH)}"
     val optionsPlistPath = "$releaseDir/options.plist"
     val hstrackerPath = "$releaseDir/HSTracker"
     val hstrackerAppPath = "$releaseDir/HSTracker.app"
@@ -52,11 +57,17 @@ class Release {
     val generateAppcast = "${config.sparkle_dir}/bin/generate_appcast"
     val appCast2ReleaseXmlPath = "$releaseDir/appcast2.xml"
 
-    val appCast2XmlPath ="${config.hsdecktracker_net_dir}/hstracker/appcast2.xml"
+    val appCast2XmlPath = "${config.hsdecktracker_net_dir}/hstracker/appcast2.xml"
 
     val dryRun = false
     val moshi = Moshi.Builder().build()
-    val mapAdapter = moshi.adapter<Map<String,Any>>(Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java))
+    val mapAdapter = moshi.adapter<Map<String, Any>>(
+        Types.newParameterizedType(
+            Map::class.java,
+            String::class.java,
+            Any::class.java
+        )
+    )
 
     val okHttpClient by lazy {
         // Create a trust manager that does not validate certificate chains
@@ -91,7 +102,7 @@ class Release {
                 <plist version="1.0">
                 <dict>
                     <key>method</key>
-                    <string>mac-application</string>
+                    <string>developer-id</string>
                 </dict>
                 </plist>""".trimIndent()
 
@@ -125,7 +136,7 @@ class Release {
 
     data class ChangelogEntry(val version: String, val markdown: String)
 
-    private fun toHtml(md: String):String {
+    private fun toHtml(md: String): String {
         val parser = Parser.builder().build()
         val renderer = HtmlRenderer.builder().build()
 
@@ -161,6 +172,59 @@ class Release {
     }
 
     @Test
+    fun build() {
+        // codesign --force -o runtime -s 'Developer ID Application: HearthSim, LLC (RL7C49LAMC)' Carthage/Build/Mac/Sparkle.framework/Resources/Autoupdate.app/Contents/MacOS/fileop
+        // codesign --force -o runtime -s 'Developer ID Application: HearthSim, LLC (RL7C49LAMC)' Carthage/Build/Mac/Sparkle.framework/Resources/Autoupdate.app/Contents/MacOS/Autoupdate
+        File(releaseDir).mkdirs()
+        File(optionsPlistPath).writeText(pListContents)
+        runCommand(config.hstracker_dir, "xcodebuild -scheme HSTracker clean")
+        runCommand(config.hstracker_dir, "xcodebuild -archivePath $hstrackerPath -scheme HSTracker archive")
+        runCommand(
+            config.hstracker_dir,
+            "xcodebuild -exportArchive -archivePath $hstrackerXcarchivePath -exportPath $releaseDir -exportOptionsPlist $optionsPlistPath"
+        )
+
+        zip(hstrackerAppPath, hstrackerAppZipPath)
+        zip(hstrackerXcarchiveDSYMPath, hstrackerDSYMZipPath)
+    }
+
+    @Test
+    fun sendForNotarization() {
+        val password = System.getenv("APPLE_PASSWORD")
+        val result = getCommandOutput(
+            config.hstracker_dir,
+            "xcrun altool --notarize-app --primary-bundle-id \"net.hearthsim.hstracker\" --username 'martin@mbonnin.net' --password '$password' --file $hstrackerAppZipPath -itc_provider RL7C49LAMC"
+        )
+
+        result.lines().forEach {
+            val regex = Regex("RequestUUID = (.*)")
+            val match = regex.matchEntire(it)
+            if (match != null) {
+                System.out.println("Notarization Request: ${match.groupValues[1]}")
+            }
+        }
+    }
+
+    @Test
+    fun checkNotarization() {
+        val password = System.getenv("APPLE_PASSWORD")
+        val requestId = ""
+
+        val result = getCommandOutput(
+            config.hstracker_dir,
+            "xcrun altool --notarization-info $requestId -u martin@mbonnin.net --password '$password'"
+        )
+
+        result.lines().forEach {
+            val regex = Regex("RequestUUID = (.*)")
+            val match = regex.matchEntire(it)
+            if (match != null) {
+                System.out.println("Notarization Request: ${match.groupValues[1]}")
+            }
+        }
+    }
+
+    @Test
     fun doRelease() {
         System.out.println("Releasing HSTracker")
 
@@ -180,14 +244,7 @@ class Release {
             throw Exception("versions do not match, either update the CHANGELOG.md or Info.plist")
         }
 
-        File(releaseDir).mkdirs()
-        File(optionsPlistPath).writeText(pListContents)
-        runCommand(config.hstracker_dir, "xcodebuild -scheme HSTracker clean")
-        runCommand(config.hstracker_dir,"xcodebuild -archivePath $hstrackerPath -scheme HSTracker archive")
-        runCommand(config.hstracker_dir,"xcodebuild -exportArchive -archivePath $hstrackerXcarchivePath -exportPath $releaseDir -exportOptionsPlist $optionsPlistPath")
-
-        zip(hstrackerAppPath, hstrackerAppZipPath)
-        zip(hstrackerXcarchiveDSYMPath, hstrackerDSYMZipPath)
+        //build()
 
         runCommand(config.hstracker_dir, "git tag $plistVersion")
         runCommand(config.hstracker_dir, "git push origin --tags")
@@ -220,7 +277,10 @@ class Release {
         }
         val itemElement = (releaseItems.item(0) as Element)
         val enclosureNode = itemElement.getElementsByTagName("enclosure").item(0)
-        (enclosureNode as Element).setAttribute("url", "https://github.com/HearthSim/HSTracker/releases/download/$versionName/HSTracker.app.zip")
+        (enclosureNode as Element).setAttribute(
+            "url",
+            "https://github.com/HearthSim/HSTracker/releases/download/$versionName/HSTracker.app.zip"
+        )
 
         val appcastDocument = builder.parse(File(appCast2XmlPath))
 
@@ -313,21 +373,34 @@ class Release {
     }
 
     private fun runCommand(workingDir: String, command: String) {
-        runArgs(workingDir, *command.split(" ").toTypedArray())
+        runArgs(workingDir, false, *command.split(" ").toTypedArray())
     }
 
-    private fun runArgs(workingDir: String, vararg args: String) {
+    private fun getCommandOutput(workingDir: String, command: String): String {
+        val inputStream = runArgs(workingDir, true, *command.split(" ").toTypedArray())
+        return inputStream.bufferedReader().readText()
+    }
+
+    private fun runArgs(workingDir: String, withOutput: Boolean, vararg args: String): InputStream {
         System.out.println("Execute: " + args.joinToString(" "))
         if (!dryRun) {
-            val ret = ProcessBuilder(*args)
+            val builder = ProcessBuilder(*args)
                 .directory(File(workingDir))
-                .redirectOutput(ProcessBuilder.Redirect.INHERIT)
                 .redirectError(ProcessBuilder.Redirect.INHERIT)
-                .start()
-                .waitFor()
+
+            if (withOutput) {
+                builder.redirectOutput(ProcessBuilder.Redirect.INHERIT)
+            }
+            val process = builder.start()
+            val ret = process.waitFor()
+
             if (ret != 0) {
                 throw java.lang.Exception("command ${args.joinToString(" ")} failed")
             }
+            return process.inputStream
+        } else {
+            return ByteArrayInputStream(ByteArray(0))
         }
+
     }
 }
