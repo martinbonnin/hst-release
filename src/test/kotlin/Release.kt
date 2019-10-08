@@ -34,7 +34,8 @@ class Release {
         val hsdecktracker_net_dir: String,
         val github_token: String,
         val hockey_app_token: String,
-        val sparkle_dir: String
+        val sparkle_dir: String,
+        val apple_password: String
     )
 
     val config = readConfig()
@@ -52,6 +53,7 @@ class Release {
     val hstrackerDSYMZipPath = "$releaseDir/HSTracker.dSYMs.zip"
 
     val infoPlistPath = "${config.hstracker_dir}/HSTracker/Info.plist"
+    val projectPath = "${config.hstracker_dir}/HSTracker.xcodeproj/project.pbxproj"
     val changelogMdPath = "${config.hstracker_dir}/CHANGELOG.md"
 
     val generateAppcast = "${config.sparkle_dir}/bin/generate_appcast"
@@ -131,7 +133,22 @@ class Release {
         val keys = nodeArray.filter { it.nodeType == ELEMENT_NODE && it.nodeName == "key" }
         val values = nodeArray.filter { it.nodeType == ELEMENT_NODE && it.nodeName == "string" }
 
-        return values[keys.indexOfFirst { it.textContent == "CFBundleShortVersionString" }].textContent
+        val plistVersion = values[keys.indexOfFirst { it.textContent == "CFBundleShortVersionString" }].textContent
+
+        if (plistVersion == "\$(MARKETING_VERSION)") {
+            val regex = Regex("\\s*MARKETING_VERSION *= *(.*);")
+            val matchResult = File(projectPath).readLines().mapNotNull {
+                regex.matchEntire(it)
+            }.firstOrNull()
+
+            if (matchResult == null) {
+                throw Exception("cannot find MARKETING_VERSION")
+            }
+
+            return matchResult.groupValues[1]
+        } else {
+            return plistVersion
+        }
     }
 
     data class ChangelogEntry(val version: String, val markdown: String)
@@ -190,10 +207,14 @@ class Release {
 
     @Test
     fun sendForNotarization() {
-        val password = System.getenv("APPLE_PASSWORD")
-        val result = getCommandOutput(
+        val password = config.apple_password
+        val command = "xcrun altool --notarize-app --verbose --primary-bundle-id \"net.hearthsim.hstracker\" --username 'martin@mbonnin.net' --password '$password' --file $hstrackerAppZipPath -itc_provider RL7C49LAMC"
+
+        println("command: $command")
+
+        /*val result = getCommandOutput(
             config.hstracker_dir,
-            "xcrun altool --notarize-app --primary-bundle-id \"net.hearthsim.hstracker\" --username 'martin@mbonnin.net' --password '$password' --file $hstrackerAppZipPath -itc_provider RL7C49LAMC"
+            command
         )
 
         result.lines().forEach {
@@ -202,12 +223,12 @@ class Release {
             if (match != null) {
                 System.out.println("Notarization Request: ${match.groupValues[1]}")
             }
-        }
+        }*/
     }
 
     @Test
     fun checkNotarization() {
-        val password = System.getenv("APPLE_PASSWORD")
+        val password = config.apple_password
         val requestId = ""
 
         val result = getCommandOutput(
@@ -373,7 +394,7 @@ class Release {
     }
 
     private fun runCommand(workingDir: String, command: String) {
-        runArgs(workingDir, false, *command.split(" ").toTypedArray())
+        runArgs(workingDir, true, *command.split(" ").toTypedArray())
     }
 
     private fun getCommandOutput(workingDir: String, command: String): String {
