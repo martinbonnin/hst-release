@@ -208,14 +208,15 @@ class Release {
     @Test
     fun sendForNotarization() {
         val password = config.apple_password
-        val command = "xcrun altool --notarize-app --verbose --primary-bundle-id \"net.hearthsim.hstracker\" --username 'martin@mbonnin.net' --password '$password' --file $hstrackerAppZipPath -itc_provider RL7C49LAMC"
+        val command = "xcrun altool --notarize-app --verbose --primary-bundle-id net.hearthsim.hstracker --username martin@mbonnin.net --password $password --file $hstrackerAppZipPath -itc_provider RL7C49LAMC"
 
         println("command: $command")
 
-        /*val result = getCommandOutput(
+        val result = getCommandOutput(
             config.hstracker_dir,
             command
         )
+        println("result: $result")
 
         result.lines().forEach {
             val regex = Regex("RequestUUID = (.*)")
@@ -223,7 +224,19 @@ class Release {
             if (match != null) {
                 System.out.println("Notarization Request: ${match.groupValues[1]}")
             }
-        }*/
+        }
+    }
+
+    @Test
+    fun notarizationHistory() {
+        val password = config.apple_password
+
+        val result = getCommandOutput(
+            config.hstracker_dir,
+            "xcrun altool --notarization-history 0 -u martin@mbonnin.net --password $password"
+        )
+
+        System.out.println(result)
     }
 
     @Test
@@ -233,7 +246,7 @@ class Release {
 
         val result = getCommandOutput(
             config.hstracker_dir,
-            "xcrun altool --notarization-info $requestId -u martin@mbonnin.net --password '$password'"
+            "xcrun altool --notarization-info $requestId -u martin@mbonnin.net --password $password"
         )
 
         result.lines().forEach {
